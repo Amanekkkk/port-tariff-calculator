@@ -1,0 +1,21 @@
+{
+  "name": "SUDESTADA",
+  "vessel_type": "Bulk Carrier",
+  "gt": 51300,
+  "nt": 31192,
+  "dwt": 93274,
+  "loa": 229.2,
+  "beam": 38,
+  "moulded_depth": 20.7,
+  "lbp": 222,
+  "draft_sw_s": 14.9,
+  "draft_sw_w": 0,
+  "draft_sw_t": 0,
+  "suez_gt": null,
+  "suez_nt": 49069,
+  "days_aside": 3.39,
+  "cargo_quantity": 40000,
+  "number_of_operations": 2,
+  "number_of_holds": 7,
+  "raw_text": "Vessel SUDESTADA, Bulk Carrier. GT: 51,300 / NT: 31,192. DWT: 93,274. LOA: 229.2m, Beam: 38m, LBP: 222m. Draft SW S/W/T: 14.9/0/0m. Days alongside: 3.39. Cargo: 40,000 MT. Arrival: 15 Nov 2024, Departure: 22 Nov 2024."
+}
