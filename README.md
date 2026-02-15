@@ -7,11 +7,10 @@ This document describes the end-to-end pipeline used to calculate South African 
 ## Table of Contents
 
 1. [Pipeline Overview](#1-pipeline-overview)
-2. [Architecture Diagram](#2-architecture-diagram)
-3. [Pipeline Stages](#3-pipeline-stages)
-4. [Data Flow](#4-data-flow)
-5. [Module Reference](#5-module-reference)
-6. [Configuration](#6-configuration)
+2. [Pipeline Stages](#2-pipeline-stages)
+3. [Data Flow](#3-data-flow)
+4. [Module Reference](#4-module-reference)
+5. [Configuration](#5-configuration)
 
 ---
 
@@ -31,126 +30,7 @@ The solution uses a **RAG (Retrieval-Augmented Generation)** pipeline that:
 
 ---
 
-## 2. Architecture Diagram
-
-```
-┌─────────────────────────────────────────────────────────────────────────────────┐
-│                              PORT TARIFF CALCULATOR PIPELINE                       │
-└─────────────────────────────────────────────────────────────────────────────────┘
-
-INPUTS                                    STAGE 1: DOCUMENT LOADING
-───────────────────────────────────────────────────────────────────────────────────
-
-┌─────────────────┐                      ┌──────────────────────────────────────┐
-│ port tariff.pdf │                      │ Docling DocumentConverter             │
-│ (data/)         │─────────────────────▶│ • convert(pdf_path)                   │
-│                 │                      │ • export_to_markdown()                 │
-│                 │                      │ Output: Full markdown text             │
-└─────────────────┘                      └──────────────────┬───────────────────┘
-                                                            │
-                                                            ▼
-STAGE 2: CHUNKING                         ┌──────────────────────────────────────┐
-                                          │ chunk_text(text)                      │
-                                          │ • chunk_size: 1500 chars              │
-                                          │ • overlap: 200 chars                  │
-                                          │ • Break at paragraph boundaries       │
-                                          │ Output: List[(chunk_text, start_pos)] │
-                                          └──────────────────┬───────────────────┘
-                                                            │
-                                                            ▼
-STAGE 3: EMBEDDING & INDEXING              ┌──────────────────────────────────────┐
-                                          │ ChromaDB + Sentence Transformers      │
-                                          │ • Model: all-MiniLM-L6-v2              │
-                                          │ • Collection: port_tariffs            │
-                                          │ • Batch size: 50 chunks               │
-                                          │ • Persist: data/chroma_db/            │
-                                          │ Output: Vector store (collection)     │
-                                          └──────────────────┬───────────────────┘
-                                                            │
-┌─────────────────┐                                         │
-│ Vessel JSON     │  STAGE 4: RETRIEVAL                     │
-│ Port name       │  ───────────────────────────────────────│
-└────────┬────────┘                                         │
-         │                                                  │
-         │    retrieve_tariff_context_multi()               │
-         │    ┌─────────────────────────────────────────────┤
-         │    │ 6 targeted queries (one per tariff type):   │
-         │    │ 1. light dues calculation formula rate      │
-         │    │ 2. port dues berth dues gross tonnage       │
-         │    │ 3. towage dues tug charges LOA beam draft   │
-         │    │ 4. VTS vehicle traffic services dues        │
-         │    │ 5. pilotage dues pilot charges LOA GT       │
-         │    │ 6. running of vessel lines mooring          │
-         │    │ • top_k_per_query: 5                        │
-         │    │ • Deduplicate by hash(chunk[:200])          │
-         │    └──────────────────────┬──────────────────────┘
-         │                           │
-         │    FALLBACK (if empty):   │
-         │    • Single broad query   │
-         │    • Or: full PDF[:35000] │
-         │                           │
-         │                           ▼
-         │              tariff_context (retrieved text)
-         │
-         ▼
-STAGE 5: PROMPT CONSTRUCTION
-───────────────────────────────────────────────────────────────────────────────────
-
-         format_vessel_context(vessel, port)
-         ┌──────────────────────────────────┐
-         │ Port, Vessel Name, Type          │
-         │ GT, NT, DWT, LOA, Beam, LBP      │
-         │ Draft, Days alongside, Cargo     │
-         │ Operations, Holds, Suez GT/NT    │
-         └──────────────────┬───────────────┘
-                            │
-                            ▼
-         build_calculation_prompt(vessel_context, tariff_context)
-         ┌──────────────────────────────────┐
-         │ ## Tariff Document Excerpts      │
-         │ {retrieved tariff rules}         │
-         │ ## Vessel Parameters and Port    │
-         │ {vessel_context}                 │
-         │ ## CRITICAL Instructions         │
-         │ (6 tariffs, JSON output, etc.)   │
-         └──────────────────┬───────────────┘
-                            │
-                            ▼
-STAGE 6: LLM GENERATION                    Full prompt
-───────────────────────────────────────────────────────────────────────────────────
-
-         ┌──────────────────────────────────────────────────────────────────┐
-         │ Gemini (gemini-2.5-flash)                                         │
-         │ • generation_config: response_mime_type="application/json"        │
-         │ • response_schema: {light_dues, port_dues, towage_dues, ...}      │
-         │ • generate_content(prompt)                                        │
-         └──────────────────────────────┬───────────────────────────────────┘
-                                        │
-                                        ▼
-STAGE 7: RESPONSE PARSING                 Raw JSON string
-───────────────────────────────────────────────────────────────────────────────────
-
-         parse_tariff_response(response_text)
-         ┌──────────────────────────────────┐
-         │ • Strip markdown code blocks     │
-         │ • Extract JSON via regex         │
-         │ • json.loads() or number extract │
-         │ • Map to TariffResult dataclass  │
-         └──────────────────┬───────────────┘
-                            │
-                            ▼
-OUTPUT                    ┌─────────────────────────────────────────────────────┐
-─────────────────────────▶│ TariffResult                                        │
-                          │ • light_dues, port_dues, towage_dues                 │
-                          │ • vts_dues, pilotage_dues                            │
-                          │ • running_of_vessel_lines_dues                       │
-                          │ (all in ZAR)                                         │
-                          └─────────────────────────────────────────────────────┘
-```
-
----
-
-## 3. Pipeline Stages
+## 2. Pipeline Stages
 
 ### Stage 1: Document Loading
 
@@ -245,7 +125,7 @@ OUTPUT                    ┌─────────────────
 
 ---
 
-## 4. Data Flow
+## 3. Data Flow
 
 ### Entry Points
 
@@ -280,7 +160,7 @@ run_tariff_calculation(vessel, port)
 
 ---
 
-## 5. Module Reference
+## 4. Module Reference
 
 | Module | Key Functions | Responsibility |
 |--------|---------------|----------------|
@@ -295,7 +175,7 @@ run_tariff_calculation(vessel, port)
 
 ---
 
-## 6. Configuration
+## 5. Configuration
 
 | Setting | Environment Variable | Default | Description |
 |---------|----------------------|---------|-------------|
@@ -310,9 +190,3 @@ run_tariff_calculation(vessel, port)
 | Fallback PDF Length | (code) | 35000 | Max chars when using full PDF as context |
 
 ---
-
-## Related Files
-
-- **README.md** – Setup, usage, and API examples
-- **requirements.txt** – Python dependencies
-- **data/example_vessel.json** – Example vessel (SUDESTADA) for Durban
